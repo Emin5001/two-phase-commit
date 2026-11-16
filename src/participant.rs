@@ -10,11 +10,13 @@ extern crate rand;
 // Rust libs
 use std::sync::{Arc};
 use std::sync::atomic::{AtomicBool};
+use std::sync::atomic::Ordering::{SeqCst};
 use ipc_channel::ipc::{IpcReceiver, IpcSender};
 
 // Local modules
 use crate::message::ProtocolMessage;
 use crate::oplog::OpLog;
+use crate::common::ProcessStatus;
 
 pub enum ParticipantState {
     Prepared,
@@ -33,7 +35,24 @@ pub struct Participant {
     running: Arc<AtomicBool>,
     tx_to_coordinator: IpcSender<ProtocolMessage>,
     rx_from_coordinator: IpcReceiver<ProtocolMessage>,
+    num_committed: u64,
+    num_aborted: u64,
+    num_unknown: u64,
 };
+
+impl ProcessStatus for Participant {
+    fn id(&self) -> &str {
+        &self.id_str
+    }
+
+    fn running(&self) -> &Arc<AtomicBool> {
+        &self.running
+    }
+
+    fn counts(&self) -> (u64, u64, u64) {
+        (self.num_committed, self.num_aborted, self.num_unknown)
+    }
+}
 
 impl Participant {
     ///
@@ -59,8 +78,20 @@ impl Participant {
                 running,
                 tx_to_coordinator,
                 rx_from_coordinator,
+                num_committed: 0,
+                num_aborted: 0,
+                num_unknown: 0,
             }
         } 
+    
+    ///
+    /// Run the protocol, acting as a Participant.
+    ///
+    pub protocol(&mut self) {
+        while self.running.load(SeqCst) {
+
+        }
+    }
 
     ///
     /// Mock a send operation. Current implementation is only a static check on a randomly generating float.
@@ -87,12 +118,4 @@ impl Participant {
             // Failed in execting
         }
     }
-
-    ///
-    /// Run the protocol, acting as a Participant.
-    ///
-    pub protocol(&mut self) {
-
-    }
-    
 }

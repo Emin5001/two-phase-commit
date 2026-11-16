@@ -21,6 +21,7 @@ pub mod participant;
 pub mod client;
 pub mod coordinator;
 pub mod oplog;
+pub mod common;
 
 use message::ProtocolMessage;
 use participant::Participant;

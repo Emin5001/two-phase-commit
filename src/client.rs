@@ -8,15 +8,16 @@
 
 // Rust libs
 use ipc_channel::ipc::{IpcReceiver, IpcSender};
-use std::sync::{Arc}
-use std::sync::atomic::{AtomicBool}
-use std::sync::atomic::Ordering::{SeqCst}
+use std::sync::{Arc};
+use std::sync::atomic::{AtomicBool};
+use std::sync::atomic::Ordering::{SeqCst};
 use std::thread;
 use std::time::Duration;
 
 // Local modules
 use crate::message::{ProtocolMessage, MessageType};
 use crate::oplog::OpLog;
+use crate::common::ProcessStatus;
 
 pub enum ClientState {
     PreparedToSendTransaction,
@@ -25,12 +26,30 @@ pub enum ClientState {
 };
 
 pub struct Client {
+    id_str: String,
     log: oplog::OpLog,
     num_requests: u32,
     running: Arc<AtomicBool>,
     tx_to_coordinator: IpcSender<ProtocolMessage>,
     rx_from_coordinator: IpcReceiver<ProtocolMessage>,
+    num_committed: u64,
+    num_aborted: u64,
+    num_unknown: u64,
 };
+
+impl ProcessStatus for Client {
+    fn id(&self) -> &str {
+        &self.id_str
+    }
+
+    fn running(&self) -> &Arc<AtomicBool> {
+        &self.running
+    }
+
+    fn counts(&self) -> (u64, u64, u64) {
+        (self.num_committed, self.num_aborted, self.num_unknown)
+    }
+}
 
 impl Client {
     ///
@@ -39,6 +58,7 @@ impl Client {
     /// Ensure it can communicate with the coordinator through ipc_channel. 
     ///
     pub fn new(
+        id_str: String,
         log: oplog::OpLog,
         num_requests: u32,
         running: Arc<AtomicBool>,
@@ -46,11 +66,15 @@ impl Client {
         rx_from_coordinator: IpcReceiver<ProtocolMessage>) -> Client {
             
             Client {
+                id_str,
                 log,
                 num_requests,
                 running,
                 tx_to_coordinator,
                 rx_from_coordinator,
+                num_committed: 0,
+                num_aborted: 0,
+                num_unknown: 0
             }
         }
     
@@ -94,37 +118,5 @@ impl Client {
     ///
     fn send_coordinator_tx(&mut self) {
 
-    }
-
-
-    ///
-    /// Helper function to make sure the client can see the ctrl+c to exit.
-    ///
-    fn wait_for_exit_signal(&mut self) {
-        trace!("{}::Waiting for exit signal", self.id_str.clone());
-
-        while self.running.load(SeqCst) {
-            thread::sleep(Duration::from_millis(10));
-        }
-
-        trace!("{}::Exiting", self.id_str.clone());
-    }
-
-    ///
-    /// Helper function to report the abort/commit/unknown aggregate status of all 
-    /// transaction requests made by this Client before exiting.
-    ///
-    fn report_status(&mut self) {
-        // TODO: Actually track properly when implementing protocol
-        let successful_ops: u64 = 0;
-        let failed_ops: u64 = 0;
-        let unknown_ops: u64 = 0;
-
-        println!(
-            "{:16}:\tCommitted: {:6}\tAborted: {:6}\tUnknown: {:6}",
-            self.id_str.clone(),
-            successful_ops,
-            failed_ops,
-            unknown_ops);
     }
 }
