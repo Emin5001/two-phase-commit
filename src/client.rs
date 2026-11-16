@@ -7,7 +7,7 @@
 // Crates
 
 // Rust libs
-use ipc_channel::ipc::{IpcReceiver, IpcSender};
+use ipc_channel::ipc::{IpcReceiver, IpcSender, TryRecvError};
 use std::sync::{Arc};
 use std::sync::atomic::{AtomicBool};
 use std::sync::atomic::Ordering::{SeqCst};
@@ -15,7 +15,7 @@ use std::thread;
 use std::time::Duration;
 
 // Local modules
-use crate::message::{ProtocolMessage, MessageType};
+use crate::message::{ProtocolMessage, MessageType, RequestStatus};
 use crate::oplog::OpLog;
 use crate::common::ProcessStatus;
 
@@ -27,7 +27,8 @@ pub enum ClientState {
 
 pub struct Client {
     id_str: String,
-    log: oplog::OpLog,
+    unique_id: u32, // We can have multiple Clients. Each client will have a unique ID that represents that Client.
+    log: OpLog,
     num_requests: u32,
     running: Arc<AtomicBool>,
     tx_to_coordinator: IpcSender<ProtocolMessage>,
@@ -35,6 +36,7 @@ pub struct Client {
     num_committed: u64,
     num_aborted: u64,
     num_unknown: u64,
+    req_id: u32,
 };
 
 impl ProcessStatus for Client {
@@ -59,7 +61,8 @@ impl Client {
     ///
     pub fn new(
         id_str: String,
-        log: oplog::OpLog,
+        unique_id: u32,
+        log: OpLog,
         num_requests: u32,
         running: Arc<AtomicBool>,
         tx_to_coordinator: IpcSender<ProtocolMessage>,
@@ -67,6 +70,7 @@ impl Client {
             
             Client {
                 id_str,
+                unique_id,
                 log,
                 num_requests,
                 running,
@@ -74,7 +78,8 @@ impl Client {
                 rx_from_coordinator,
                 num_committed: 0,
                 num_aborted: 0,
-                num_unknown: 0
+                num_unknown: 0,
+                req_id: 0,
             }
         }
     
@@ -82,7 +87,32 @@ impl Client {
     /// Run the protocol, acting as a Client.
     ///
     pub fn protocol(&mut self) {
+        // Send num_requests amount of requests to the Coordinator
+        for client_tx_id in 0..self.num_requests {
+            // If Ctrl+C is pressed while we are running the protocol, Exit.
+            if !self.running.load(SeqCst) {
+                break;
+            }
 
+            // Make tx_id unique, as we can have multiple Clients
+            let tx_id = self.unique_id * self.num_requests + client_tx_id;
+
+            let message = ProtocolMessage::generate(
+                MessageType::ClientRequest,
+                tx_id,
+                self.id_str.clone(),
+                client_tx_id,
+            );
+
+            if let Err(err) = self.tx_to_coordinator.send(message) {
+                eprintln!("Failed to send request: {:?}", err);
+                break;
+            }
+
+            self.wait_on_coordinator_rx();
+        }
+
+        // Wait for exit
         self.wait_for_exit_signal();
         self.report_status();
     }
@@ -101,13 +131,32 @@ impl Client {
                         _ => continue,
                     };
 
-                    println!("Transaction {}: {:?}", res.tx_id, status);
+                    println!("Transaction {}: {:?}", res.tx_id, rx_status);
                     // Do something with the result
+
+
+
+                    // Update counters
+                    match rx_status {
+                        RequestStatus::Committed => {
+                            self.num_committed += 1
+                        },
+                        RequestStatus::Aborted => {
+                            self.num_aborted += 1
+                        },
+                        _ => {
+                            self.num_unknown += 1
+                        }
+                    }
                     break;
                 },
-                Err(_) => {
-                    // TODO: only here for debug. Remove later on.
-                    println!("Waiting...");
+                Err(TryRecvError::Empty) => {
+                    // Channel is empty. Sleep for a bit and then retry.
+                    thread::sleep(Duration::from_millis(10));
+                },
+                Err(TryRecvError::IpcError(err)) => {
+                    eprintln!("Receive failed: {:?}", err);
+                    break;
                 }
             }
         }

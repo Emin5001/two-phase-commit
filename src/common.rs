@@ -30,7 +30,7 @@ pub trait ProcessStatus {
         trace!("{}::Exiting", self.id());
     }
 
-    fn report_status(self) {
+    fn report_status(&self) {
         let (committed, aborted, unknown) = self.counts();
 
         println!(

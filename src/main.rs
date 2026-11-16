@@ -98,6 +98,8 @@ fn run_client(opts: &tpcopts::TPCOptions, running: Arc<AtomicBool>) {
     let (tx_to_coordinator, rx_from_coordinator) = connect_to_coordinator(opts);
 
     let mut client = Client::new(
+        client_id_str,
+        opts.num,
         log,
         opts.num_requests,
         running,

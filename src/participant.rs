@@ -28,7 +28,7 @@ pub enum ParticipantState {
 
 pub struct Participant {
     id_str: String,
-    log: oplog::OpLog,
+    log: OpLog,
     state: ParticipantState,
     exec_success_prob: f64,
     send_success_prob: f64,
@@ -62,7 +62,7 @@ impl Participant {
     ///
     pub fn new(
         id_str: String,
-        log: oplog::OpLog,
+        log: OpLog,
         exec_success_prob: f64,
         send_success_prob: f64,
         running: Arc<AtomicBool>,
@@ -87,10 +87,11 @@ impl Participant {
     ///
     /// Run the protocol, acting as a Participant.
     ///
-    pub protocol(&mut self) {
-        while self.running.load(SeqCst) {
+    pub fn protocol(&mut self) {
 
-        }
+        // Wait for exit
+        self.wait_for_exit_signal();
+        self.report_status();
     }
 
     ///
