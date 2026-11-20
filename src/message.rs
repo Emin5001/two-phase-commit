@@ -8,7 +8,7 @@ extern crate serde_json;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// What type of Message we are sending on the channel between processes.
-#[derive(serde::Seralize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageType {
     CoordinatorPropose,    // Coordinator proposes an update to Participants
     CoordinatorAbort,      // Coordinator decides to Rollback
@@ -18,23 +18,24 @@ pub enum MessageType {
     ClientRequest,         // Request from Client
     ClientResultCommit,    // Request from Client has been Committed
     ClientResultAbort,     // Request from Client has not been Committed and has been Aborted
+    CoordinatorExit,       // Coordinator tells child processes to exit
 }
 
 /// Result of the Clients Request.
-#[derive(serde::Seralize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RequestStatus {
     Committed,
     Aborted,
     Unknown, // Usually binary. Unknown just for the heck of it.
 }
 
-#[derive(serde::Seralize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct ProtocolMessage {
     pub mtype: MessageType, // Type of message we send
     pub uid: u32,           // The unique ID relative to the current process
     pub tx_id: u32,         // The unique transaction ID that the client requested
-    pub sender_id: String,  // The unique sender ID that represents what process sent this ProtocolMessage
-    pub op_id: u32,         // Operation ID, relative to the original client who started this transaction.
+    pub sender_id: String, // The unique sender ID that represents what process sent this ProtocolMessage
+    pub op_id: u32, // Operation ID, relative to the original client who started this transaction.
 }
 
 static COUNTER: AtomicU32 = AtomicU32::new(1);
@@ -44,7 +45,8 @@ impl ProtocolMessage {
         mtype: MessageType,
         tx_id: u32,
         sender_id: String,
-        op_id: u32) -> ProtocolMessage {
+        op_id: u32,
+    ) -> ProtocolMessage {
         ProtocolMessage {
             mtype,
             uid: COUNTER.fetch_add(1, Ordering::SeqCst),

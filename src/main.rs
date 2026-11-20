@@ -1,6 +1,3 @@
-// Used for dev purposes. TODO: Should remove in final version
-#![allow(dead_code)]
-
 // Crates
 extern crate ctrlc;
 extern crate stderrlog;
@@ -15,17 +12,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 // Local modules
-pub mod message;
-pub mod tpcopts;
-pub mod participant;
+pub mod checker;
 pub mod client;
-pub mod coordinator;
-pub mod oplog;
 pub mod common;
+pub mod coordinator;
+pub mod message;
+pub mod oplog;
+pub mod participant;
+pub mod tpcopts;
 
-use message::ProtocolMessage;
-use participant::Participant;
 use client::Client;
+use coordinator::Coordinator;
+use message::ProtocolMessage;
+use oplog::OpLog;
+use participant::Participant;
 
 // Child sends its own IpcSender and IpcReceiver endpoints to the Parent, and vice versa
 type ParentChannels = (IpcSender<ProtocolMessage>, IpcReceiver<ProtocolMessage>);
@@ -86,7 +86,42 @@ fn connect_to_coordinator(
 }
 
 //
-fn run(opts: &tpcopts::TPCOptions, running: Arc<AtomicBool>) {}
+fn run(opts: &tpcopts::TPCOptions, running: Arc<AtomicBool>) {
+    let log = OpLog::new(format!("{}/coordinator.log", opts.log_path));
+    let mut coordinator = Coordinator::new(log, running);
+    let mut children = Vec::new();
+
+    // Start participants before clients begin sending requests
+    for num in 0..opts.num_participants {
+        let mut child_opts = opts.clone();
+        child_opts.mode = "participant".to_string();
+        child_opts.num = num;
+        let (child, tx, rx) = spawn_child(&child_opts);
+        children.push(child);
+        coordinator.add_participant(format!("participant_{}", num), tx, rx);
+    }
+    for num in 0..opts.num_clients {
+        let mut child_opts = opts.clone();
+        child_opts.mode = "client".to_string();
+        child_opts.num = num;
+        let (child, tx, rx) = spawn_child(&child_opts);
+        children.push(child);
+        coordinator.add_client(format!("client_{}", num), tx, rx);
+    }
+
+    coordinator.protocol();
+    let mut failed = false;
+    for mut child in children {
+        match child.wait() {
+            Ok(status) if status.success() => {}
+            result => {
+                eprintln!("Child process failed: {:?}", result);
+                failed = true;
+            }
+        }
+    }
+    assert!(!failed, "A child process failed");
+}
 
 //
 fn run_client(opts: &tpcopts::TPCOptions, running: Arc<AtomicBool>) {
@@ -104,7 +139,7 @@ fn run_client(opts: &tpcopts::TPCOptions, running: Arc<AtomicBool>) {
         opts.num_requests,
         running,
         tx_to_coordinator,
-        rx_from_coordinator
+        rx_from_coordinator,
     );
 
     // Kick off the Client for the 2PC Protocol.
@@ -127,7 +162,7 @@ fn run_participant(opts: &tpcopts::TPCOptions, running: Arc<AtomicBool>) {
         opts.send_success_probability,
         running,
         tx_to_coordinator,
-        rx_from_coordinator
+        rx_from_coordinator,
     );
 
     // Kick off the Participant for the 2PC Protocol.
@@ -135,10 +170,21 @@ fn run_participant(opts: &tpcopts::TPCOptions, running: Arc<AtomicBool>) {
 }
 
 //
-fn run_check(opts: &tpcopts::TPCOptions, running: Arc<AtomicBool>) {}
+fn run_check(opts: &tpcopts::TPCOptions) {
+    checker::check_last_run(
+        opts.num_clients,
+        opts.num_requests,
+        opts.num_participants,
+        &opts.log_path,
+    );
+}
 
 fn main() {
     let opts = tpcopts::TPCOptions::parse();
+    if let Err(err) = opts.validate() {
+        eprintln!("{}", err);
+        std::process::exit(2);
+    }
 
     stderrlog::new()
         .module(module_path!())
@@ -148,12 +194,8 @@ fn main() {
         .init()
         .unwrap();
 
-    match fs::create_dir_all(&opts.log_path) {
-        Err(e) => error!(
-            "Failed to create log path: \"{:?}\". Error \"{:?}\"",
-            opts.log_path, e
-        ),
-        _ => (),
+    if opts.mode != "check" {
+        fs::create_dir_all(&opts.log_path).expect("Failed to create log path");
     }
 
     let running = Arc::new(AtomicBool::new(true));
@@ -166,9 +208,9 @@ fn main() {
 
     match opts.mode.as_ref() {
         "run" => run(&opts, running),
-        "client" => run_client(_ & opts, running),
+        "client" => run_client(&opts, running),
         "participant" => run_participant(&opts, running),
-        "check" => run_check(&opts, running),
+        "check" => run_check(&opts),
         _ => panic!("Error: Mode is not run, client, participant, or check."),
     }
 }

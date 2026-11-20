@@ -7,170 +7,58 @@
 //! log and stderrlog crates to initialize the application to use trace!(),
 //! debug!(), info!() etc macros from the log crate.
 //!
-extern crate clap;
-extern crate log;
-extern crate stderrlog;
-use clap::{App, Arg};
+use clap::Parser;
 
-extern crate ctrlc;
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Parser)]
+#[command(
+    name = "two_phase_commit",
+    version,
+    about = "2PC exercise written in Rust"
+)]
 pub struct TPCOptions {
+    #[arg(short = 'S', default_value_t = 1.0, value_parser = probability)]
     pub send_success_probability: f64, // Probability that a message send succeeds
+    #[arg(short = 's', default_value_t = 1.0, value_parser = probability)]
     pub operation_success_probability: f64, // Probability that an operation succeeds
-    pub num_clients: u32,              // Number of concurrent clients issuing requests
-    pub num_requests: u32,             // Number of requests issued per client
+    #[arg(short = 'c', default_value_t = 3)]
+    pub num_clients: u32, // Number of concurrent clients issuing requests
+    #[arg(short = 'r', default_value_t = 15)]
+    pub num_requests: u32, // Number of requests issued per client
+    #[arg(short = 'p', default_value_t = 3)]
     pub num_participants: u32, // Number of participants in 2PC protocol (not including coordinator)
+    #[arg(short = 'v', default_value_t = 0)]
     pub verbosity: usize, // Integer verbosity level. experiment with 0 (default) to 5 (fire-hose of output)
-    pub mode: String,     // One of "run", "client", "particpant", "check"
+    #[arg(short = 'm', default_value = "run", value_parser = ["run", "client", "participant", "check"])]
+    pub mode: String, // One of "run", "client", "participant", "check"
+    #[arg(short = 'l', default_value = "./logs/")]
     pub log_path: String, // Directory for client, participant, and coordinator logs
+    #[arg(long = "ipc_path", default_value = "none")]
     pub ipc_path: String, // Path to IPC socket for setting up communication with the coordinator
-    pub num: u32,         // Participant / Client number for naming the log files
+    #[arg(long, default_value_t = 0)]
+    pub num: u32, // Participant / Client number for naming the log files
+}
+
+fn probability(value: &str) -> Result<f64, String> {
+    let probability = value.parse::<f64>().map_err(|err| err.to_string())?;
+    if probability.is_finite() && (0.0..=1.0).contains(&probability) {
+        Ok(probability)
+    } else {
+        Err("Probability must be between 0 and 1".to_string())
+    }
 }
 
 impl TPCOptions {
     ///
-    /// new()
-    /// Returns a new options structure containing CLI options / defaults
+    /// Check options before starting the protocol
     ///
-    pub fn new() -> TPCOptions {
-        // Default values for CLI options
-        let default_send_success_probability = "1.0";
-        let default_operation_success_probability = "1.0";
-        let default_num_participants = "3";
-        let default_num_clients = "3";
-        let default_num_requests = "15";
-        let default_verbosity = "0";
-        let default_mode = "run";
-        let default_log_path = "./logs/";
-        let default_ipc_path = "none";
-        let default_num = "0";
-
-        // Set-Up clap
-        let matches = App::new("concurrency-2pc")
-            .version("0.1.0")
-            .author("Rust Student <enk438@cs.utexas.edu>")
-            .about("2PC exercise written in Rust")
-            .arg(Arg::with_name("send_success_probability")
-                    .short("S")
-                    .required(false)
-                    .takes_value(true)
-                    .help("Probability participants successfully send messages"))
-            .arg(Arg::with_name("operation_success_probability")
-                    .short("s")
-                    .required(false)
-                    .takes_value(true)
-                    .help("Probability participants successfully execute requests"))
-            .arg(Arg::with_name("num_clients")
-                    .short("c")
-                    .required(false)
-                    .takes_value(true)
-                    .help("Number of clients making requests"))
-            .arg(Arg::with_name("num_participants")
-                    .short("p")
-                    .required(false)
-                    .takes_value(true)
-                    .help("Number of participants in protocol"))
-            .arg(Arg::with_name("num_requests")
-                    .short("r")
-                    .required(false)
-                    .takes_value(true)
-                    .help("Number of requests made per client"))
-            .arg(Arg::with_name("verbosity")
-                    .short("v")
-                    .required(false)
-                    .takes_value(true)
-                    .help("Output verbosity: 0->No Output, 5->Output Everything"))
-            .arg(Arg::with_name("log_path")
-                    .short("l")
-                    .required(false)
-                    .takes_value(true)
-                    .help("Specifies path to directory where logs are stored"))
-            .arg(Arg::with_name("mode")
-                    .short("m")
-                    .required(false)
-                    .takes_value(true)
-                    .help("Mode: \"run\" starts 2PC, \"client\" starts a client process, \"participant\" starts a participant process, \"check\" checks logs produced by previous run"))
-            .arg(Arg::with_name("ipc_path")
-                    .long("ipc_path")
-                    .required(false)
-                    .takes_value(true)
-                    .help("Path for IPC socket for communication"))
-            .arg(Arg::with_name("num")
-                    .long("num")
-                    .required(false)
-                    .takes_value(true)
-                    .help("Participant / Client number for naming the log files. Ranges from 0 to num_clients - 1 or num_participants - 1"))
-            .get_matches();
-
-        // Parse CLI options and take default values if none given
-        let mode = matches.value_of("mode").unwrap_or(default_mode);
-        let operation_success_probability = matches
-            .value_of("operation_success_probability")
-            .unwrap_or(default_operation_success_probability)
-            .parse::<f64>()
-            .unwrap();
-        let send_success_probability = matches
-            .value_of("send_success_probability")
-            .unwrap_or(default_send_success_probability)
-            .parse::<f64>()
-            .unwrap();
-        let num_clients = matches
-            .value_of("num_clients")
-            .unwrap_or(default_num_clients)
-            .parse::<u32>()
-            .unwrap();
-        let num_participants = matches
-            .value_of("num_participants")
-            .unwrap_or(default_num_participants)
-            .parse::<u32>()
-            .unwrap();
-        let num_requests = matches
-            .value_of("num_requests")
-            .unwrap_or(default_num_requests)
-            .parse::<u32>()
-            .unwrap();
-        let verbosity = matches
-            .value_of("verbosity")
-            .unwrap_or(default_verbosity)
-            .parse::<usize>()
-            .unwrap();
-        let log_path = matches.value_of("log_path").unwrap_or(default_log_path);
-        let ipc_path = matches.value_of("ipc_path").unwrap_or(default_ipc_path);
-        let num = matches
-            .value_of("num")
-            .unwrap_or(default_num)
-            .parse::<u32>()
-            .unwrap();
-
-        // IPC path is necessary for client / participant to communicate with the coordinator
-        match mode.as_ref() {
-            "run" => {}
-            "client" => {
-                if ipc_path == default_ipc_path {
-                    panic!("No ipc_path specified for client mode");
-                }
-            }
-            "participant" => {
-                if ipc_path == default_ipc_path {
-                    panic!("No ipc_path specified for participant mode");
-                }
-            }
-            "check" => {}
-            _ => panic!("unknown execution mode requested!"),
+    pub fn validate(&self) -> Result<(), String> {
+        if matches!(self.mode.as_str(), "client" | "participant") && self.ipc_path == "none" {
+            return Err("No ipc_path specified for child process".to_string());
         }
-
-        TPCOptions {
-            send_success_probability: send_success_probability,
-            operation_success_probability: operation_success_probability,
-            num_clients: num_clients,
-            num_participants: num_participants,
-            num_requests: num_requests,
-            verbosity: verbosity,
-            mode: mode.to_string(),
-            log_path: log_path.to_string(),
-            ipc_path: ipc_path.to_string(),
-            num: num,
+        if self.num_clients.checked_mul(self.num_requests).is_none() {
+            return Err("Number of transactions exceeds the transaction ID range".to_string());
         }
+        Ok(())
     }
 
     ///
